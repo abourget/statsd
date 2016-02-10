@@ -141,7 +141,10 @@ const (
 	influxDBFormat
 )
 
-// New creates a new Client with the given options.
+// New creates a new Client with the given options. New will always
+// return a Client, even though `error` is not nil.  You might receive
+// an error if the configured `statsd` endpoint is not responding.
+// The caller is responsible for exiting or Close()-ing the Client.
 func New(addr string, options ...Option) (*Client, error) {
 	c := &Client{
 		// Worst-case scenario:
@@ -159,22 +162,6 @@ func New(addr string, options ...Option) (*Client, error) {
 
 	if c.network == "" {
 		c.network = "udp"
-	}
-	var err error
-	c.conn, err = dialTimeout(c.network, addr, 5*time.Second)
-	if err != nil {
-		return nil, err
-	}
-	// When using UDP do a quick check to see if something is listening on the
-	// given port to return an error as soon as possible.
-	if c.network[:3] == "udp" {
-		for i := 0; i < 2; i++ {
-			_, err = c.conn.Write(nil)
-			if err != nil {
-				_ = c.conn.Close()
-				return nil, err
-			}
-		}
 	}
 
 	if c.flushPeriod == 0 {
@@ -199,6 +186,23 @@ func New(addr string, options ...Option) (*Client, error) {
 				c.mu.Unlock()
 			}
 		}()
+	}
+
+	var err error
+	c.conn, err = dialTimeout(c.network, addr, 5*time.Second)
+	if err != nil {
+		return c, err
+	}
+	// When using UDP do a quick check to see if something is listening on the
+	// given port to return an error as soon as possible.
+	if c.network[:3] == "udp" {
+		for i := 0; i < 2; i++ {
+			_, err = c.conn.Write(nil)
+			if err != nil {
+				_ = c.conn.Close()
+				return c, err
+			}
+		}
 	}
 
 	return c, nil
