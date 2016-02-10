@@ -22,7 +22,7 @@ type Client struct {
 	// Fields settable with options at Client's creation.
 	muted         bool
 	errorHandler  func(error)
-	flushPeriod   time.Duration
+	flushPeriod   *time.Duration
 	maxPacketSize int
 	network       string
 	prefix        string
@@ -55,7 +55,7 @@ func WithErrorHandler(h func(error)) Option {
 // By default the flush period is 100 milliseconds.
 func WithFlushPeriod(period time.Duration) Option {
 	return Option(func(c *Client) {
-		c.flushPeriod = period
+		c.flushPeriod = &period
 	})
 }
 
@@ -164,17 +164,18 @@ func New(addr string, options ...Option) (*Client, error) {
 		c.network = "udp"
 	}
 
-	if c.flushPeriod == 0 {
-		c.flushPeriod = 100 * time.Millisecond
+	if c.flushPeriod == nil {
+		d := 100 * time.Millisecond
+		c.flushPeriod = &d
 	}
 
 	// To prevent a buffer overflow add some capacity to the buffer to allow for
 	// an additional metric.
 	c.buf = make([]byte, 0, c.maxPacketSize+200)
 
-	if c.flushPeriod > 0 {
+	if *c.flushPeriod > 0 {
 		go func() {
-			ticker := time.NewTicker(c.flushPeriod)
+			ticker := time.NewTicker(*c.flushPeriod)
 			for _ = range ticker.C {
 				c.mu.Lock()
 				if c.closed {
@@ -208,8 +209,13 @@ func New(addr string, options ...Option) (*Client, error) {
 	return c, nil
 }
 
-// Count adds n to bucket with the given sampling rate.
-func (c *Client) Count(bucket string, n int, rate float32) {
+// Count adds n to bucket, always.
+func (c *Client) Count(bucket string, n int) {
+	c.CountRated(bucket, n, 1.0)
+}
+
+// CountRated adds n to bucket with the given sampling rate.
+func (c *Client) CountRated(bucket string, n int, rate float32) {
 	if c.muted {
 		return
 	}
@@ -233,11 +239,17 @@ func isRandAbove(rate float32) bool {
 }
 
 // Increment increment the given bucket.
-// It is equivalent to Count(bucket, 1, 1).
+// It is equivalent to Count(bucket, 1).
 func (c *Client) Increment(bucket string) {
-	c.Count(bucket, 1, 1)
+	c.Count(bucket, 1)
 }
 
+// Decrement decrements the given bucket.
+// It is equivalent to Count(bucket, -1).
+func (c *Client) Decrement(bucket string) {
+	c.Count(bucket, -1)
+
+}
 // Gauge records an absolute value for the given bucket.
 func (c *Client) Gauge(bucket string, value int) {
 	if c.muted {
@@ -284,8 +296,13 @@ func (c *Client) gauge(value int) {
 	c.closeMetric()
 }
 
-// Timing sends a timing value to a bucket with the given sampling rate.
-func (c *Client) Timing(bucket string, value int, rate float32) {
+// Timing sends a timing value to a bucket, always.
+func (c *Client) Timing(bucket string, value int) {
+	c.TimingRated(bucket, value, 1.0)
+}
+
+// TimingRated sends a timing value to a bucket with the given sampling rate.
+func (c *Client) TimingRated(bucket string, value int, rate float32) {
 	if c.muted {
 		return
 	}
@@ -315,10 +332,16 @@ func (c *Client) NewTiming() Timing {
 	return Timing{start: now(), c: c}
 }
 
-// Send sends the time elapsed since the creation of the Timing to a bucket
-// with the given sampling rate.
-func (t Timing) Send(bucket string, rate float32) {
-	t.c.Timing(bucket, int(t.Duration()/time.Millisecond), rate)
+// Send sends the time elapsed since the creation of the Timing to a
+// bucket, always.
+func (t Timing) Send(bucket string) {
+	t.SendRated(bucket, 1.0)
+}
+
+// SendRated sends the time elapsed since the creation of the Timing
+// to a bucket with the given sampling rate.
+func (t Timing) SendRated(bucket string, rate float32) {
+	t.c.TimingRated(bucket, int(t.Duration()/time.Millisecond), rate)
 }
 
 // Duration gets the duration since the creation of the Timing.
